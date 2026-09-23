@@ -11,6 +11,7 @@ ESPN's fantasy API is unofficial: no developer app or approval needed.
    - `ESPN_LEAGUE_ID`: the `leagueId=...` number in your league's fantasy.espn.com URL.
    - `ESPN_S2` and `ESPN_SWID`: while logged in at fantasy.espn.com, open Chrome DevTools > Application > Cookies > `https://fantasy.espn.com` and copy the `espn_s2` and `SWID` values (SWID includes the `{braces}`). Needed for private leagues, and SWID is how the tool finds your team. Treat both like a password: they belong only in `.env`, never `.env.example`.
 3. Run `.venv\Scripts\python.exe main.py espn` to see your roster and the top free agents by this week's projection.
+4. Run `.venv\Scripts\python.exe advise.py espn` for this week's lineup check and waiver pickups. It flags empty or injured starting slots, bench players who should start, and the free agents that would most improve your best lineup (with a suggested drop). It only reads your league; make any moves in the ESPN app.
 
 ## Yahoo setup
 
