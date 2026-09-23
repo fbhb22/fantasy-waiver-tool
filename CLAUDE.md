@@ -47,4 +47,9 @@ There is no automated test suite in this repo.
   - **Injury risk / depth value (2026-09-23):** future weeks in `season_points()` subtract, for each starter, `WEEKLY_MISS_RATE[pos]` (RB 8%, WR/TE 6%, QB 4%; rough ballpark figures, not fitted) x the points lost without him. This first-order expected value ignores two starters missing the same week. It gives bench depth value by position, so a 4th RB outranks a 7th WR. `injury_risk=False` gives the old deterministic model.
   - `waivers.py` takes ~1.5 min: roughly 12 ESPN requests + news, plus the simulation. BoxPlayer `injuryStatus` can be a list; `advisor._injury_status()` normalizes it.
   - **Known gaps:** ESPN's return date can lag the news (Goedert: date 9/28 vs. "miss a few weeks"), so read the headline. Future weeks use a flat per-game value, not matchup-adjusted.
+- `fantasy_tool/trades.py` + `trade_finder.py` (2026-09-23): runs the season simulation on both rosters.
+  - Screening uses `injury_risk=False` for speed: 1-for-1 and 2-for-1 (you give two) packages, targeting only their players who'd start for you. The top 60 are re-scored with injury risk.
+  - An offer must pass all of: my gain >= `MIN_MY_GAIN`, their gain >= 0, my gain > their gain, and paper value they receive (`ros_market_value` = ros_ppg x available weeks) >= `PAPER_FAIRNESS` x paper value they give.
+  - A team over its active-roster limit (starters + BE) cuts its lowest paper-value players, never the ones just received. Only one package is kept per target, preferring fewer players when within 1 pt.
+  - The edge usually comes from positional need, so offers often look generous to them on paper while helping your lineup more.
 - Installing `espn-api` downgraded `urllib3` to 2.2.3 (its pin); the Yahoo libraries still import fine.

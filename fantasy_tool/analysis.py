@@ -137,6 +137,27 @@ def set_availability(prof: Profile, injury_details: dict | None, pro_schedule: d
     prof.weeks_missed = [w for w in game_weeks if w not in available]
 
 
+def profiles_for(players: list, history: dict, injuries: dict, pro_schedule: dict,
+                 week: int, final_week: int) -> list[Profile]:
+    """Profiles with signals and availability for a list of loaded players.
+    `injuries` maps player id -> injuryDetails; players loaded through
+    get_player_pool() carry their own `injury_details` as a fallback."""
+    out = []
+    for p in players:
+        prof = build_profile(p, history.get(p.playerId), week)
+        details = injuries.get(p.playerId) if p.playerId in injuries else getattr(p, "injury_details", None)
+        set_availability(prof, details, pro_schedule, week, final_week)
+        out.append(prof)
+    return out
+
+
+def ros_market_value(p: Profile) -> float:
+    """Context-free 'on paper' worth: per-game value x remaining games he can
+    play. What a league-mate eyeballing a trade roughly sees, independent of
+    either team's lineup needs."""
+    return p.ros_ppg * len(p.available)
+
+
 def _ros_lineup_points(players: list[Profile], slots: list[str]) -> tuple[float, list[Profile]]:
     lineup = advisor.best_lineup(players, slots, key=lambda p: p.ros_ppg)
     starters = [p for p in lineup.values() if p]
