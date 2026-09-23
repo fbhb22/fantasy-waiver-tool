@@ -44,6 +44,7 @@ There is no automated test suite in this repo.
     - For rostered players, `get_injury_details()` needs the `kona_playercard` view, and adding a `limit` to its `filterIds` filter gets an HTTP 400.
     - Status OUT/DOUBTFUL/IR/SUSPENSION always removes the current week, even when the return date is game day (Monday night).
     - `get_news()` hits site.api.espn.com and keeps only headlines naming the player.
+  - **Injury risk / depth value (2026-09-23):** future weeks in `season_points()` subtract, for each starter, `WEEKLY_MISS_RATE[pos]` (RB 8%, WR/TE 6%, QB 4%; rough ballpark figures, not fitted) x the points lost without him. This first-order expected value ignores two starters missing the same week. It gives bench depth value by position, so a 4th RB outranks a 7th WR. `injury_risk=False` gives the old deterministic model.
   - `waivers.py` takes ~1.5 min: roughly 12 ESPN requests + news, plus the simulation. BoxPlayer `injuryStatus` can be a list; `advisor._injury_status()` normalizes it.
   - **Known gaps:** ESPN's return date can lag the news (Goedert: date 9/28 vs. "miss a few weeks"), so read the headline. Future weeks use a flat per-game value, not matchup-adjusted.
 - Installing `espn-api` downgraded `urllib3` to 2.2.3 (its pin); the Yahoo libraries still import fine.

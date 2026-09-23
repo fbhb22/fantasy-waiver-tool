@@ -96,6 +96,13 @@ def build_profile(p, history, week: int) -> Profile:
     return prof
 
 
+# Rough chance a currently healthy starter misses any given future week to a
+# new injury, by position. Rough NFL-wide ballpark figures, not a fitted
+# model: RBs get hurt most, kickers and defenses essentially never "miss".
+# This is what gives bench depth value: a backup is worth the points he'd
+# save you in the weeks a starter goes down.
+WEEKLY_MISS_RATE = {"QB": 0.04, "RB": 0.08, "WR": 0.06, "TE": 0.06, "K": 0.0, "D/ST": 0.0}
+
 # Statuses that mean "misses this week" when ESPN gives no return date.
 _MISSING_STATUSES = {"OUT", "DOUBTFUL", "INJURY_RESERVE", "SUSPENSION"}
 
@@ -130,18 +137,40 @@ def set_availability(prof: Profile, injury_details: dict | None, pro_schedule: d
     prof.weeks_missed = [w for w in game_weeks if w not in available]
 
 
-def season_points(players: list[Profile], slots: list[str], week: int, final_week: int) -> dict[int, float]:
-    """Best-lineup points for each week from `week` to `final_week`, using
-    only players available that week: ESPN's weekly projection for the
-    current week, blended per-game value for later weeks."""
+def _ros_lineup_points(players: list[Profile], slots: list[str]) -> tuple[float, list[Profile]]:
+    lineup = advisor.best_lineup(players, slots, key=lambda p: p.ros_ppg)
+    starters = [p for p in lineup.values() if p]
+    return sum(p.ros_ppg for p in starters), starters
+
+
+def season_points(players: list[Profile], slots: list[str], week: int, final_week: int,
+                  injury_risk: bool = True) -> dict[int, float]:
+    """Expected best-lineup points for each week from `week` to `final_week`,
+    using only players available that week: ESPN's weekly projection for the
+    current week (whose injury news is already known), blended per-game value
+    for later weeks.
+
+    With `injury_risk`, each later week also allows for a starter getting
+    hurt: for each starter, subtract (his WEEKLY_MISS_RATE) x (points lost if
+    the best lineup had to do without him). That's a first-order expected
+    value (it ignores two starters missing the same week), and it's what
+    makes a backup at an injury-prone position worth rostering."""
     out = {}
     for w in range(week, final_week + 1):
         if w == week:
             out[w] = advisor.lineup_points(advisor.best_lineup(players, slots))
-        else:
-            avail = [p for p in players if w in p.available]
-            lineup = advisor.best_lineup(avail, slots, key=lambda p: p.ros_ppg)
-            out[w] = sum(p.ros_ppg for p in lineup.values() if p)
+            continue
+        avail = [p for p in players if w in p.available]
+        points, starters = _ros_lineup_points(avail, slots)
+        if injury_risk:
+            expected = points
+            for s in starters:
+                rate = WEEKLY_MISS_RATE.get(s.position, 0.0)
+                if rate:
+                    without, _ = _ros_lineup_points([p for p in avail if p is not s], slots)
+                    expected -= rate * (points - without)
+            points = expected
+        out[w] = points
     return out
 
 
