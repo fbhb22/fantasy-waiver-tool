@@ -39,5 +39,11 @@ There is no automated test suite in this repo.
   - **FAAB:** `faab_bid()` maps ROS points to the league's own winning-bid distribution (median/90th pct of paid bids from `recent_activity`). Demand is raised by ESPN `percentChange`, capped at 35% of remaining budget and at the richest rival + $1.
   - **Data:** `espn_client.get_player_pool()` uses espn-api internals (`_get_pro_schedule`, `_get_positional_ratings`) to build BoxPlayers plus the raw `ownership` dict. Opp rank: 1 = toughest, verified against ESPN's avg points allowed. `get_history()` uses one batched `player_info` call.
   - **Gotcha:** "D/ST" contains a slash but isn't a flex; always use `advisor.is_flex()`.
-  - **Known gaps:** games left assumes one bye (not per-team); an injured roster player's ROS is his healthy projection, so long injuries are undervalued.
+  - **Byes + injuries (2026-09-23):** value is a week-by-week simulation (`season_points`): each week's best lineup from players available that week. The current week uses ESPN's weekly projection; later weeks use `ros_ppg`.
+    - `set_availability()` uses `get_pro_schedule()` (one request: every team's bye and kickoff per week) and ESPN `injuryDetails.expectedReturnDate` / `outForSeason`.
+    - For rostered players, `get_injury_details()` needs the `kona_playercard` view, and adding a `limit` to its `filterIds` filter gets an HTTP 400.
+    - Status OUT/DOUBTFUL/IR/SUSPENSION always removes the current week, even when the return date is game day (Monday night).
+    - `get_news()` hits site.api.espn.com and keeps only headlines naming the player.
+  - `waivers.py` takes ~1.5 min: roughly 12 ESPN requests + news, plus the simulation. BoxPlayer `injuryStatus` can be a list; `advisor._injury_status()` normalizes it.
+  - **Known gaps:** ESPN's return date can lag the news (Goedert: date 9/28 vs. "miss a few weeks"), so read the headline. Future weeks use a flat per-game value, not matchup-adjusted.
 - Installing `espn-api` downgraded `urllib3` to 2.2.3 (its pin); the Yahoo libraries still import fine.

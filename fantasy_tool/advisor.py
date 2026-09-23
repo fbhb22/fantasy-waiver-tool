@@ -28,6 +28,13 @@ class RosterPlayer:
     raw: object = field(default=None, repr=False)
 
 
+def _injury_status(status) -> str | None:
+    # Usually a string, but some free-agent records carry a list of statuses.
+    if isinstance(status, (list, tuple)):
+        status = next((s for s in reversed(status) if s), None)
+    return status if status not in (None, "", "ACTIVE", "NORMAL") else None
+
+
 def espn_player(p, week: int) -> RosterPlayer:
     return RosterPlayer(
         name=p.name,
@@ -36,7 +43,7 @@ def espn_player(p, week: int) -> RosterPlayer:
         eligible_slots=list(p.eligibleSlots),
         proj=p.stats.get(week, {}).get("projected_points", 0.0),
         season_avg=p.projected_avg_points or 0.0,
-        injury=p.injuryStatus if p.injuryStatus not in (None, "ACTIVE", "NORMAL") else None,
+        injury=_injury_status(p.injuryStatus),
         slot=p.lineupSlot or "",
         owned=p.percent_owned,
         raw=p,

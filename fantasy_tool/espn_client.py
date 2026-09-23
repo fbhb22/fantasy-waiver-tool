@@ -70,7 +70,68 @@ def get_player_pool(league: League, position: str, size: int = 20) -> list:
     for raw in data["players"]:
         p = BoxPlayer(raw, schedule, ratings, week, league.year)
         p.ownership = raw["player"].get("ownership") or {}
+        p.injury_details = raw["player"].get("injuryDetails") or {}
         out.append(p)
+    return out
+
+
+def get_injury_details(league: League, player_ids: list[int]) -> dict[int, dict]:
+    """ESPN's injuryDetails per player ({'type', 'expectedReturnDate':
+    [y, m, d], 'outForSeason'}), for players not loaded via get_player_pool()
+    (e.g. your roster). One request. Healthy players have no entry."""
+    import json
+
+    if not player_ids:
+        return {}
+    filters = {"players": {"filterIds": {"value": list(player_ids)}}}  # a "limit" here gets an HTTP 400
+    data = league.espn_request.league_get(
+        # kona_playercard is what carries expectedReturnDate for rostered players.
+        params={"view": ["kona_player_info", "kona_playercard"], "scoringPeriodId": league.current_week},
+        headers={"x-fantasy-filter": json.dumps(filters)},
+    )
+    return {raw["player"]["id"]: raw["player"].get("injuryDetails") or {} for raw in data.get("players", [])}
+
+
+def get_pro_schedule(league: League) -> dict[str, dict]:
+    """Every NFL team's season, keyed by team abbreviation (as on Player.proTeam):
+    {'bye': week, 'games': {week: kickoff datetime}}. One request."""
+    import datetime as dt
+    from espn_api.football.constant import PRO_TEAM_MAP
+
+    data = league.espn_request.get_pro_schedule()
+    out = {}
+    for team in data.get("settings", {}).get("proTeams", []):
+        abbrev = PRO_TEAM_MAP.get(team["id"], team.get("abbrev"))
+        games = {}
+        for wk, gs in (team.get("proGamesByScoringPeriod") or {}).items():
+            if gs:
+                games[int(wk)] = dt.datetime.fromtimestamp(gs[0]["date"] / 1000)
+        out[abbrev] = {"bye": team.get("byeWeek"), "games": games}
+    return out
+
+
+def get_news(player_id: int, name: str, limit: int = 2) -> list[tuple[str, str]]:
+    """Latest ESPN news blurbs about this player: [(YYYY-MM-DD, headline)].
+    ESPN's per-player feed also returns general articles that merely mention
+    him, so only headlines naming him are kept."""
+    import requests
+
+    try:
+        resp = requests.get(
+            "https://site.api.espn.com/apis/fantasy/v2/games/ffl/news/players",
+            params={"playerId": player_id, "limit": 10}, timeout=15,
+        )
+        feed = resp.json().get("feed") or [] if resp.ok else []
+    except (requests.RequestException, ValueError):
+        return []
+    last = name.replace(" Jr.", "").replace(" Sr.", "").split()[-1].lower()
+    out = []
+    for item in feed:
+        headline = (item.get("headline") or "").strip()
+        if last in headline.lower():
+            out.append(((item.get("published") or "")[:10], headline))
+        if len(out) >= limit:
+            break
     return out
 
 

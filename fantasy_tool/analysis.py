@@ -1,15 +1,19 @@
 """Deeper pickup/drop analysis and FAAB bid sizing.
 
-Value model, in one line: a player's rest-of-season (ROS) worth is his
-blended points per game (ESPN's season projection, pulled toward what he's
-actually scored once he has 2+ games), and a pickup's value is how much it
-raises your best ROS lineup, times the games left.
+Value model: a player's worth per game is his blended points per game
+(ESPN's season projection, pulled toward what he's actually scored as games
+accumulate). A pickup's value is simulated week by week: for this week (ESPN's
+weekly projection) and every remaining week through the fantasy playoffs,
+your best lineup from the players actually available that week -- not on
+bye, not out injured (from ESPN's expected return date) -- with and without
+the move. The difference, summed, is the points the move adds.
 
 Everything is a heuristic meant to be read, not obeyed: each number the
 report prints is shown next to the signals behind it.
 """
 from __future__ import annotations
 
+import datetime as dt
 import statistics
 from dataclasses import dataclass, field
 
@@ -42,6 +46,12 @@ class Profile(advisor.RosterPlayer):
     pct_change: float = 0.0  # week-over-week change in % owned, all ESPN leagues
     opponent: str = ""
     opp_rank: int = 0  # ESPN rank vs. this position: 1 = toughest, 32 = easiest
+    bye_week: int | None = None
+    injury_type: str = ""
+    return_date: dt.date | None = None  # ESPN's expected return date
+    out_for_season: bool = False
+    available: set = field(default_factory=set)  # remaining weeks he can play
+    weeks_missed: list = field(default_factory=list)  # remaining game weeks he'll miss (injury)
 
     @property
     def ros_ppg(self) -> float:
@@ -86,19 +96,65 @@ def build_profile(p, history, week: int) -> Profile:
     return prof
 
 
-def _ros_points(lineup_players: list[Profile], slots: list[str]) -> float:
-    lineup = advisor.best_lineup(lineup_players, slots, key=lambda p: p.ros_ppg)
-    return sum(p.ros_ppg for p in lineup.values() if p)
+# Statuses that mean "misses this week" when ESPN gives no return date.
+_MISSING_STATUSES = {"OUT", "DOUBTFUL", "INJURY_RESERVE", "SUSPENSION"}
 
 
-def drop_ranking(roster: list[Profile], slot_counts: dict[str, int]) -> list[dict]:
-    """Roster players ordered from most to least droppable, by how much the
-    best ROS lineup loses without them (almost always 0 for bench players),
-    then ROS points per game. A player who is your only depth at a position
-    you start is ranked as less droppable, so a drop never leaves a slot
-    with nobody to cover a bye."""
+def set_availability(prof: Profile, injury_details: dict | None, pro_schedule: dict,
+                     week: int, final_week: int) -> None:
+    """Fills bye_week / injury fields and the set of remaining weeks
+    (week..final_week) the player can actually play."""
+    team = pro_schedule.get(prof.team) or {}
+    games = team.get("games", {})
+    prof.bye_week = team.get("bye")
+    game_weeks = [w for w in range(week, final_week + 1) if w in games]
+
+    details = injury_details or {}
+    prof.injury_type = details.get("type") or ""
+    prof.out_for_season = bool(details.get("outForSeason"))
+    ret = details.get("expectedReturnDate")
+    prof.return_date = dt.date(*ret) if ret and len(ret) == 3 else None
+
+    if prof.out_for_season:
+        available = set()
+    elif prof.return_date:
+        available = {w for w in game_weeks if games[w].date() >= prof.return_date}
+    else:
+        available = set(game_weeks)
+    # The current status wins for this week, even if the return date falls
+    # on game day (e.g. a Monday-night game); with no return date, the
+    # length is unknown, so assume this week only.
+    if prof.injury in _MISSING_STATUSES:
+        available.discard(week)
+    prof.available = available
+    prof.weeks_missed = [w for w in game_weeks if w not in available]
+
+
+def season_points(players: list[Profile], slots: list[str], week: int, final_week: int) -> dict[int, float]:
+    """Best-lineup points for each week from `week` to `final_week`, using
+    only players available that week: ESPN's weekly projection for the
+    current week, blended per-game value for later weeks."""
+    out = {}
+    for w in range(week, final_week + 1):
+        if w == week:
+            out[w] = advisor.lineup_points(advisor.best_lineup(players, slots))
+        else:
+            avail = [p for p in players if w in p.available]
+            lineup = advisor.best_lineup(avail, slots, key=lambda p: p.ros_ppg)
+            out[w] = sum(p.ros_ppg for p in lineup.values() if p)
+    return out
+
+
+def drop_ranking(roster: list[Profile], slot_counts: dict[str, int], week: int, final_week: int) -> list[dict]:
+    """Roster players ordered from most to least droppable: by how many
+    season points your best weekly lineups lose without them (this week
+    through the playoffs, byes and injuries included), then by per-game value
+    scaled by how many remaining weeks they can play (so an out-for-season
+    player ranks as fully droppable). Your only player at a position you
+    start is ranked as less droppable."""
     slots = advisor.starting_slots(slot_counts)
-    full = _ros_points(roster, slots)
+    n_weeks = max(final_week - week + 1, 1)
+    full = sum(season_points(roster, slots, week, final_week).values())
     need = {s: n for s, n in slot_counts.items() if not advisor.is_flex(s) and s not in advisor.NON_STARTING_SLOTS}
     by_pos: dict[str, int] = {}
     for p in roster:
@@ -106,18 +162,23 @@ def drop_ranking(roster: list[Profile], slot_counts: dict[str, int]) -> list[dic
 
     out = []
     for p in roster:
-        loss = full - _ros_points([q for q in roster if q is not p], slots)
+        loss = full - sum(season_points([q for q in roster if q is not p], slots, week, final_week).values())
         reasons = []
         only_depth = by_pos.get(p.position, 0) <= need.get(p.position, 0)
         if only_depth:
             reasons.append(f"your only {p.position}")
-        if loss > 0.05:
-            reasons.append(f"best ROS lineup loses {loss:.1f}/game")
-        if p.injury:
+        if loss > 0.5:
+            reasons.append(f"lineups lose {loss:.0f} pts without him")
+        if p.out_for_season:
+            reasons.append("out for season")
+        elif p.return_date:
+            reasons.append(f"{p.injury_type or 'injured'}, back ~{p.return_date:%b %d}")
+        elif p.injury:
             reasons.append(p.injury.lower())
         if p.trend == "falling":
             reasons.append("usage falling")
-        score = loss * 10 + p.ros_ppg + (5 if only_depth else 0)
+        avail_frac = len(p.available) / n_weeks
+        score = (loss / n_weeks) * 10 + p.ros_ppg * avail_frac + (5 if only_depth else 0)
         out.append({"player": p, "loss": loss, "score": score, "reasons": reasons})
     out.sort(key=lambda d: d["score"])
     return out
@@ -179,36 +240,39 @@ def faab_bid(ros_gain_points: float, pct_change: float, market: Market, stream: 
 
 
 def evaluate_pickups(roster: list[Profile], pool: list[Profile], slot_counts: dict[str, int],
-                     games_left: int, market: Market) -> list[dict]:
-    """Every free agent that improves your best ROS lineup (or, for K/D/ST,
-    this week's lineup), with the best drop for that specific add and a bid."""
+                     week: int, final_week: int, market: Market) -> list[dict]:
+    """Every free agent whose addition (with the best drop for that specific
+    add) raises your best weekly lineups' total from this week through the
+    playoffs, with the weeks it helps and a bid."""
     slots = advisor.starting_slots(slot_counts)
-    base_ros = _ros_points(roster, slots)
-    base_week = advisor.lineup_points(advisor.best_lineup(roster, slots))
+    base = season_points(roster, slots, week, final_week)
     out = []
     for fa in pool:
         # Rank drops as if the new player were already on the roster, so
         # e.g. adding a TE frees up your old injured TE as a drop option.
-        drops = [d for d in drop_ranking(roster + [fa], slot_counts) if d["player"] is not fa]
+        drops = [d for d in drop_ranking(roster + [fa], slot_counts, week, final_week) if d["player"] is not fa]
         drop = drops[0]
-        after = [p for p in roster if p is not drop["player"]] + [fa]
-        ros_gain = _ros_points(after, slots) - base_ros
-        week_gain = advisor.lineup_points(advisor.best_lineup(after, slots)) - base_week
-        stream = fa.position in STREAM_POSITIONS
-        if ros_gain * games_left <= 0.05 and week_gain <= 0.05:
+        after = season_points([p for p in roster if p is not drop["player"]] + [fa], slots, week, final_week)
+        gains = {w: after[w] - base[w] for w in base}
+        total = sum(gains.values())
+        if total <= 0.05:
             continue
-        # Bids follow ROS value; a this-week-only fix (a stream, or a
-        # fill-in while a starter is hurt) is worth a token $0-1.
-        fair, to_win = faab_bid(0 if stream else max(ros_gain * games_left, 0), fa.pct_change, market,
-                                stream=stream or ros_gain * games_left <= 0.05)
+        stream = fa.position in STREAM_POSITIONS
+        if stream and gains[week] <= 0.05:
+            continue  # streams are judged on this week alone
+        # Short-term: nearly all the value lands this week and next (a
+        # stream, or a fill-in while a starter is hurt or on bye).
+        later = sum(g for w, g in gains.items() if w > week + 1)
+        short_term = not stream and later <= 0.25 * total
+        fair, to_win = faab_bid(0 if stream else total, fa.pct_change, market, stream=stream or short_term)
         out.append({
-            "add": fa, "drop": drop, "stream": stream,
-            "ros_gain_ppg": round(ros_gain, 2), "ros_gain_points": round(ros_gain * games_left, 1),
-            "week_gain": round(week_gain, 1), "fair": fair, "to_win": to_win,
-            "short_term": not stream and ros_gain * games_left <= 0.05,
+            "add": fa, "drop": drop, "stream": stream, "short_term": short_term,
+            "ros_gain_points": round(total, 1), "week_gain": round(gains[week], 1),
+            "helps_weeks": [w for w, g in gains.items() if g > 0.05],
+            "fair": fair, "to_win": to_win,
         })
     out.sort(key=lambda r: (r["stream"], r["short_term"],
-                            -(r["week_gain"] if (r["stream"] or r["short_term"]) else r["ros_gain_points"])))
+                            -(r["week_gain"] if r["stream"] else r["ros_gain_points"])))
     return out
 
 
