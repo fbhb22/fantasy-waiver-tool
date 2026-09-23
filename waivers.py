@@ -26,18 +26,11 @@ positions = sorted(s for s in slot_counts if not advisor.is_flex(s) and s not in
 pool_raw = [p for pos in positions for p in espn.get_player_pool(league, pos, size=20)]
 history = espn.get_history(league, [p.playerId for p in team.roster] + [p.playerId for p in pool_raw])
 pro_schedule = espn.get_pro_schedule(league)
-roster_injuries = espn.get_injury_details(league, [p.playerId for p in team.roster])
+roster_meta = espn.get_player_meta(league, [p.playerId for p in team.roster])
+ratings = espn.get_matchup_ratings(league)
 
-roster = []
-for p in team.roster:
-    prof = analysis.build_profile(p, history.get(p.playerId), week)
-    analysis.set_availability(prof, roster_injuries.get(p.playerId), pro_schedule, week, final_week)
-    roster.append(prof)
-pool = []
-for p in pool_raw:
-    prof = analysis.build_profile(p, history.get(p.playerId), week)
-    analysis.set_availability(prof, getattr(p, "injury_details", None), pro_schedule, week, final_week)
-    pool.append(prof)
+roster = analysis.profiles_for(team.roster, history, roster_meta, pro_schedule, week, final_week, ratings)
+pool = analysis.profiles_for(pool_raw, history, {}, pro_schedule, week, final_week, ratings)
 
 budget = int(getattr(league.settings, "acquisition_budget", 0) or 0)
 rivals = sorted((budget - t.acquisition_budget_spent for t in league.teams if t is not team), reverse=True)

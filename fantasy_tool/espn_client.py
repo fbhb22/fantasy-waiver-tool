@@ -75,26 +75,65 @@ def get_player_pool(league: League, position: str, size: int = 20) -> list:
     return out
 
 
-def get_injury_details(league: League, player_ids: list[int]) -> dict[int, dict]:
-    """ESPN's injuryDetails per player ({'type', 'expectedReturnDate':
-    [y, m, d], 'outForSeason'}), for players not loaded via get_player_pool()
-    (e.g. your roster). One request. Healthy players have no entry."""
+def get_player_meta(league: League, player_ids: list[int]) -> dict[int, dict]:
+    """Per-player fields espn-api doesn't expose, for any players, in one
+    request: {'injury': injuryDetails ({'type', 'expectedReturnDate': [y, m, d],
+    'outForSeason'}), 'auction': ESPN-wide average auction value (name value),
+    'rating': ESPN player-rater score (season-to-date production)}."""
     import json
 
     if not player_ids:
         return {}
-    filters = {"players": {"filterIds": {"value": list(player_ids)}}}  # a "limit" here gets an HTTP 400
+    # A "limit" here gets an HTTP 400.
+    filters = {"players": {"filterIds": {"value": list(player_ids)}}}
     data = league.espn_request.league_get(
         # kona_playercard is what carries expectedReturnDate for rostered players.
         params={"view": ["kona_player_info", "kona_playercard"], "scoringPeriodId": league.current_week},
         headers={"x-fantasy-filter": json.dumps(filters)},
     )
-    return {raw["player"]["id"]: raw["player"].get("injuryDetails") or {} for raw in data.get("players", [])}
+    out = {}
+    for raw in data.get("players", []):
+        pl = raw["player"]
+        out[pl["id"]] = {
+            "injury": pl.get("injuryDetails") or {},
+            "auction": (pl.get("ownership") or {}).get("auctionValueAverage") or 0.0,
+            "rating": ((raw.get("ratings") or {}).get("0") or {}).get("totalRating") or 0.0,
+        }
+    return out
+
+
+def get_injury_details(league: League, player_ids: list[int]) -> dict[int, dict]:
+    """ESPN's injuryDetails per player id (see get_player_meta)."""
+    return {pid: m["injury"] for pid, m in get_player_meta(league, player_ids).items()}
+
+
+def get_matchup_ratings(league: League) -> dict[str, dict]:
+    """Fantasy points each NFL team's defense has allowed per game to each
+    position this season: {'RB': {'avg': league avg, 'by_opp': {'KC': 18.2, ...}}}.
+    For 'D/ST' it's points scored by defenses against that team's offense."""
+    from espn_api.football.constant import PRO_TEAM_MAP
+
+    data = league.espn_request.league_get(
+        params={"view": "mPositionalRatingsStats", "scoringPeriodId": league.current_week})
+    ratings = data.get("positionAgainstOpponent", {}).get("positionalRatings", {})
+    pos_names = {"1": "QB", "2": "RB", "3": "WR", "4": "TE", "5": "K", "16": "D/ST"}
+    out = {}
+    for pos_id, r in ratings.items():
+        pos = pos_names.get(pos_id)
+        if not pos:
+            continue
+        out[pos] = {
+            "avg": r.get("average") or 0.0,
+            "by_opp": {PRO_TEAM_MAP.get(int(t), t): v.get("average") or 0.0
+                       for t, v in (r.get("ratingsByOpponent") or {}).items()},
+        }
+    return out
 
 
 def get_pro_schedule(league: League) -> dict[str, dict]:
     """Every NFL team's season, keyed by team abbreviation (as on Player.proTeam):
-    {'bye': week, 'games': {week: kickoff datetime}}. One request."""
+    {'bye': week, 'games': {week: kickoff datetime}, 'opponents': {week: abbrev}}.
+    One request."""
     import datetime as dt
     from espn_api.football.constant import PRO_TEAM_MAP
 
@@ -102,11 +141,14 @@ def get_pro_schedule(league: League) -> dict[str, dict]:
     out = {}
     for team in data.get("settings", {}).get("proTeams", []):
         abbrev = PRO_TEAM_MAP.get(team["id"], team.get("abbrev"))
-        games = {}
+        games, opponents = {}, {}
         for wk, gs in (team.get("proGamesByScoringPeriod") or {}).items():
             if gs:
-                games[int(wk)] = dt.datetime.fromtimestamp(gs[0]["date"] / 1000)
-        out[abbrev] = {"bye": team.get("byeWeek"), "games": games}
+                g = gs[0]
+                games[int(wk)] = dt.datetime.fromtimestamp(g["date"] / 1000)
+                opp_id = g["awayProTeamId"] if g["homeProTeamId"] == team["id"] else g["homeProTeamId"]
+                opponents[int(wk)] = PRO_TEAM_MAP.get(opp_id, str(opp_id))
+        out[abbrev] = {"bye": team.get("byeWeek"), "games": games, "opponents": opponents}
     return out
 
 

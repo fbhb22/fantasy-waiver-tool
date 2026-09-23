@@ -48,8 +48,23 @@ There is no automated test suite in this repo.
   - `waivers.py` takes ~1.5 min: roughly 12 ESPN requests + news, plus the simulation. BoxPlayer `injuryStatus` can be a list; `advisor._injury_status()` normalizes it.
   - **Known gaps:** ESPN's return date can lag the news (Goedert: date 9/28 vs. "miss a few weeks"), so read the headline. Future weeks use a flat per-game value, not matchup-adjusted.
 - `fantasy_tool/trades.py` + `trade_finder.py` (2026-09-23): runs the season simulation on both rosters.
-  - Screening uses `injury_risk=False` for speed: 1-for-1 and 2-for-1 (you give two) packages, targeting only their players who'd start for you. The top 60 are re-scored with injury risk.
-  - An offer must pass all of: my gain >= `MIN_MY_GAIN`, their gain >= 0, my gain > their gain, and paper value they receive (`ros_market_value` = ros_ppg x available weeks) >= `PAPER_FAIRNESS` x paper value they give.
-  - A team over its active-roster limit (starters + BE) cuts its lowest paper-value players, never the ones just received. Only one package is kept per target, preferring fewer players when within 1 pt.
-  - The edge usually comes from positional need, so offers often look generous to them on paper while helping your lineup more.
+  - **Screening:** `injury_risk=False` for speed, over 1-for-1 and 2-for-1 packages, targeting only players who'd start for you. It skips packages that fail the perceived-value check before simulating.
+  - **Refining:** the top 80 are re-scored with the full model under all `MODES` (blend / espn / actual; see `Profile.ppg`).
+  - **An offer needs:**
+    - my gain >= `MIN_MY_GAIN` in EVERY mode;
+    - their gain >= 0;
+    - my blend gain > their gain;
+    - their `PerceivedValue` received >= `PERCEIVED_FAIRNESS` x given.
+  - **Confidence:** HIGH if I still gain with incoming players at `PESSIMISTIC_HAIRCUT`.
+  - **PerceivedValue:** the mean percentile of (ESPN projection x available weeks, ESPN auction value, player rater), squared as a star premium. Injured stars (e.g. Jacobs out to Oct 30, auction $2) score low, so they're legitimate buy-lows.
+  - **Other rules:**
+    - `--add` / `--drop` model pending claims.
+    - A team over its roster limit cuts its lowest-value players, never the incoming ones.
+    - One package is kept per target.
+    - Offers are ranked by worst-case (min-mode) gain.
+- **Strength of schedule (2026-09-23):**
+  - `get_matchup_ratings()` (`mPositionalRatingsStats`) returns points allowed per game by each defense to each position. `get_pro_schedule()` now also returns each week's opponent.
+  - `set_matchups()` gives each future week a multiplier `1 + trust x (allowed/avg - 1)`, with `trust = (week-1)/((week-1)+SOS_PRIOR_GAMES)`, capped at +/-`SOS_MAX_SWING`.
+  - `week_value()` = `ppg(mode)` x matchup x optional haircut, used by `season_points()` everywhere.
+  - `profiles_for(players, history, meta, schedule, week, final, ratings)` is the shared loader. `get_player_meta()` (injury + auction + rating) replaces the old injury-only call, which remains as a wrapper.
 - Installing `espn-api` downgraded `urllib3` to 2.2.3 (its pin); the Yahoo libraries still import fine.

@@ -52,13 +52,28 @@ class Profile(advisor.RosterPlayer):
     out_for_season: bool = False
     available: set = field(default_factory=set)  # remaining weeks he can play
     weeks_missed: list = field(default_factory=list)  # remaining game weeks he'll miss (injury)
+    matchup: dict = field(default_factory=dict)  # week -> strength-of-schedule multiplier
+    opponents: dict = field(default_factory=dict)  # week -> NFL opponent
+    auction: float = 0.0  # ESPN-wide average auction value (name value)
+    espn_rating: float = 0.0  # ESPN player-rater score, season to date
 
     @property
     def ros_ppg(self) -> float:
-        if self.games >= 2 and self.season_avg > 0:
-            w = ACTUAL_WEIGHT_MAX * min(self.games, FULL_WEIGHT_GAMES) / FULL_WEIGHT_GAMES
-            return round((1 - w) * self.season_avg + w * self.actual_ppg, 2)
-        return self.season_avg
+        return self.ppg("blend")
+
+    def ppg(self, mode: str = "blend") -> float:
+        """Per-game value under one of the scoring views:
+        - blend: ESPN season projection pulled toward actual scoring (default)
+        - espn: ESPN's season projection alone
+        - actual: weighted mostly toward actual scoring (60%) once 2+ games
+        Trades are checked under all three so an edge that only exists in
+        one view (e.g. a 2-game hot streak) is flagged as fragile."""
+        if self.games < 2 or self.season_avg <= 0 or mode == "espn":
+            return self.season_avg
+        if mode == "actual":
+            return round(0.4 * self.season_avg + 0.6 * self.actual_ppg, 2)
+        w = ACTUAL_WEIGHT_MAX * min(self.games, FULL_WEIGHT_GAMES) / FULL_WEIGHT_GAMES
+        return round((1 - w) * self.season_avg + w * self.actual_ppg, 2)
 
 
 def build_profile(p, history, week: int) -> Profile:
@@ -137,16 +152,57 @@ def set_availability(prof: Profile, injury_details: dict | None, pro_schedule: d
     prof.weeks_missed = [w for w in game_weeks if w not in available]
 
 
-def profiles_for(players: list, history: dict, injuries: dict, pro_schedule: dict,
-                 week: int, final_week: int) -> list[Profile]:
-    """Profiles with signals and availability for a list of loaded players.
-    `injuries` maps player id -> injuryDetails; players loaded through
-    get_player_pool() carry their own `injury_details` as a fallback."""
+# Strength of schedule: how far a defense's points-allowed-per-game to a
+# position is trusted after N games (N / (N + SOS_PRIOR_GAMES)), and the
+# largest boost/penalty any single matchup can apply.
+SOS_PRIOR_GAMES = 4
+SOS_MAX_SWING = 0.25
+
+
+def set_matchups(prof: Profile, pro_schedule: dict, ratings: dict, week: int, final_week: int) -> None:
+    """Per-week multiplier on a player's value from his future opponents:
+    1 + trust x (points that defense allows to his position / league average - 1),
+    capped at +/-SOS_MAX_SWING. `trust` grows with games played, since two
+    weeks of defensive stats are mostly noise."""
+    opps = (pro_schedule.get(prof.team) or {}).get("opponents", {})
+    pos = ratings.get(prof.position) or {}
+    avg = pos.get("avg") or 0.0
+    trust = (week - 1) / ((week - 1) + SOS_PRIOR_GAMES)
+    prof.opponents = {w: o for w, o in opps.items() if week <= w <= final_week}
+    prof.matchup = {}
+    for w, opp in prof.opponents.items():
+        allowed = (pos.get("by_opp") or {}).get(opp)
+        if not avg or allowed is None:
+            continue
+        f = 1 + trust * (allowed / avg - 1)
+        prof.matchup[w] = max(1 - SOS_MAX_SWING, min(1 + SOS_MAX_SWING, f))
+
+
+def week_value(p: Profile, w: int, mode: str = "blend", haircut: dict | None = None) -> float:
+    """Expected points in week w: per-game value x that week's matchup x an
+    optional per-player haircut (used for pessimistic trade checks)."""
+    v = p.ppg(mode) * p.matchup.get(w, 1.0)
+    if haircut:
+        v *= haircut.get(id(p), 1.0)
+    return v
+
+
+def profiles_for(players: list, history: dict, meta: dict, pro_schedule: dict,
+                 week: int, final_week: int, ratings: dict | None = None) -> list[Profile]:
+    """Profiles with signals, availability and (with `ratings`) strength of
+    schedule for a list of loaded players. `meta` maps player id ->
+    get_player_meta() entry; players loaded through get_player_pool() carry
+    their own `injury_details` as a fallback."""
     out = []
     for p in players:
         prof = build_profile(p, history.get(p.playerId), week)
-        details = injuries.get(p.playerId) if p.playerId in injuries else getattr(p, "injury_details", None)
+        m = meta.get(p.playerId)
+        details = m["injury"] if m else getattr(p, "injury_details", None)
+        if m:
+            prof.auction, prof.espn_rating = m["auction"], m["rating"]
         set_availability(prof, details, pro_schedule, week, final_week)
+        if ratings:
+            set_matchups(prof, pro_schedule, ratings, week, final_week)
         out.append(prof)
     return out
 
@@ -158,18 +214,22 @@ def ros_market_value(p: Profile) -> float:
     return p.ros_ppg * len(p.available)
 
 
-def _ros_lineup_points(players: list[Profile], slots: list[str]) -> tuple[float, list[Profile]]:
-    lineup = advisor.best_lineup(players, slots, key=lambda p: p.ros_ppg)
+def _ros_lineup_points(players: list[Profile], slots: list[str], w: int = 0, mode: str = "blend",
+                       haircut: dict | None = None) -> tuple[float, list[Profile]]:
+    def value(p):
+        return week_value(p, w, mode, haircut)
+    lineup = advisor.best_lineup(players, slots, key=value)
     starters = [p for p in lineup.values() if p]
-    return sum(p.ros_ppg for p in starters), starters
+    return sum(value(p) for p in starters), starters
 
 
 def season_points(players: list[Profile], slots: list[str], week: int, final_week: int,
-                  injury_risk: bool = True) -> dict[int, float]:
+                  injury_risk: bool = True, mode: str = "blend",
+                  haircut: dict | None = None) -> dict[int, float]:
     """Expected best-lineup points for each week from `week` to `final_week`,
     using only players available that week: ESPN's weekly projection for the
-    current week (whose injury news is already known), blended per-game value
-    for later weeks.
+    current week (whose injury news is already known), and for later weeks
+    the per-game value (see Profile.ppg `mode`) x that week's matchup.
 
     With `injury_risk`, each later week also allows for a starter getting
     hurt: for each starter, subtract (his WEEKLY_MISS_RATE) x (points lost if
@@ -182,13 +242,13 @@ def season_points(players: list[Profile], slots: list[str], week: int, final_wee
             out[w] = advisor.lineup_points(advisor.best_lineup(players, slots))
             continue
         avail = [p for p in players if w in p.available]
-        points, starters = _ros_lineup_points(avail, slots)
+        points, starters = _ros_lineup_points(avail, slots, w, mode, haircut)
         if injury_risk:
             expected = points
             for s in starters:
                 rate = WEEKLY_MISS_RATE.get(s.position, 0.0)
                 if rate:
-                    without, _ = _ros_lineup_points([p for p in avail if p is not s], slots)
+                    without, _ = _ros_lineup_points([p for p in avail if p is not s], slots, w, mode, haircut)
                     expected -= rate * (points - without)
             points = expected
         out[w] = points
