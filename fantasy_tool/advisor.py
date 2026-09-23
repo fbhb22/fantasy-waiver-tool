@@ -43,20 +43,28 @@ def espn_player(p, week: int) -> RosterPlayer:
     )
 
 
+def is_flex(slot: str) -> bool:
+    """Flex slots combine positions ("RB/WR/TE", "OP"). "D/ST" has a slash
+    but is a single position."""
+    return slot == "OP" or ("/" in slot and slot != "D/ST")
+
+
 def starting_slots(slot_counts: dict[str, int]) -> list[str]:
     """Expands {'RB': 2, 'RB/WR/TE': 1, ...} into a fill order: single-position
     slots first, flex slots last, so the flex takes the best player left over."""
     slots = [s for s, n in slot_counts.items() for _ in range(n) if n and s not in NON_STARTING_SLOTS]
-    return sorted(slots, key=lambda s: "/" in s or s == "OP")
+    return sorted(slots, key=is_flex)
 
 
-def best_lineup(players: list[RosterPlayer], slots: list[str]) -> dict[int, RosterPlayer | None]:
-    """Greedy highest-projection fill, one player per slot. `slots` must be
-    in starting_slots() order, which makes greedy optimal for the usual
-    single-position-then-flex layout."""
-    # A player projected 0 (injured, bye) adds nothing, so a slot with only
+def best_lineup(players: list[RosterPlayer], slots: list[str], key=None) -> dict[int, RosterPlayer | None]:
+    """Greedy highest-value fill, one player per slot. `slots` must be in
+    starting_slots() order, which makes greedy optimal for the usual
+    single-position-then-flex layout. `key` is the value to rank by
+    (default: this week's projection)."""
+    key = key or (lambda p: p.proj)
+    # A player valued at 0 (injured, bye) adds nothing, so a slot with only
     # those options is left empty rather than "filled".
-    pool = sorted((p for p in players if p.proj > 0), key=lambda p: -p.proj)
+    pool = sorted((p for p in players if key(p) > 0), key=lambda p: -key(p))
     used: set[int] = set()
     lineup: dict[int, RosterPlayer | None] = {}
     for i, slot in enumerate(slots):

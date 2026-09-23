@@ -41,5 +41,47 @@ def get_free_agents(league: League, position: str | None = None, size: int = 50)
     return league.free_agents(size=size, position=position)
 
 
+def get_player_pool(league: League, position: str, size: int = 20) -> list:
+    """Free agents at one position, as BoxPlayers (this week's opponent and
+    ESPN's opponent rank vs. the position), each with the raw ESPN
+    `ownership` dict attached, which espn-api otherwise drops. That dict
+    carries percentChange: the week-over-week change in % owned across all
+    ESPN leagues, i.e. who's being picked up right now."""
+    import json
+    from espn_api.football.box_player import BoxPlayer
+    from espn_api.football.constant import POSITION_MAP
+
+    week = league.current_week
+    filters = {"players": {
+        "filterStatus": {"value": ["FREEAGENT", "WAIVERS"]},
+        "filterSlotIds": {"value": [POSITION_MAP[position]]},
+        "limit": size,
+        "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
+    }}
+    data = league.espn_request.league_get(
+        params={"view": "kona_player_info", "scoringPeriodId": week},
+        headers={"x-fantasy-filter": json.dumps(filters)},
+    )
+    # These two are espn-api internals (what free_agents() itself uses);
+    # pinned to espn-api 0.46.0's behavior.
+    schedule = league._get_pro_schedule(week)
+    ratings = league._get_positional_ratings(week)
+    out = []
+    for raw in data["players"]:
+        p = BoxPlayer(raw, schedule, ratings, week, league.year)
+        p.ownership = raw["player"].get("ownership") or {}
+        out.append(p)
+    return out
+
+
+def get_history(league: League, player_ids: list[int]) -> dict[int, Player]:
+    """Full-season, week-by-week stats for these players in one request."""
+    if not player_ids:
+        return {}
+    result = league.player_info(playerId=list(player_ids))
+    players = result if isinstance(result, list) else [result]
+    return {p.playerId: p for p in players if p}
+
+
 def week_projection(player: Player, week: int) -> float:
     return player.stats.get(week, {}).get("projected_points", 0.0)

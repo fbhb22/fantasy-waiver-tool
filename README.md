@@ -12,6 +12,7 @@ ESPN's fantasy API is unofficial: no developer app or approval needed.
    - `ESPN_S2` and `ESPN_SWID`: while logged in at fantasy.espn.com, open Chrome DevTools > Application > Cookies > `https://fantasy.espn.com` and copy the `espn_s2` and `SWID` values (SWID includes the `{braces}`). Needed for private leagues, and SWID is how the tool finds your team. Treat both like a password: they belong only in `.env`, never `.env.example`.
 3. Run `.venv\Scripts\python.exe main.py espn` to see your roster and the top free agents by this week's projection.
 4. Run `.venv\Scripts\python.exe advise.py espn` for this week's lineup check and waiver pickups. It flags empty or injured starting slots, bench players who should start, and the free agents that would most improve your best lineup (with a suggested drop). It only reads your league; make any moves in the ESPN app.
+5. Run `.venv\Scripts\python.exe waivers.py espn` for the deeper pickup/drop analysis with FAAB bids. For each candidate it shows rest-of-season points added to your best lineup, usage trend (targets + carries), ESPN ownership change, and this week's matchup. It also suggests a fair bid and a to-win bid, sized from your league's own past winning bids, your remaining budget and rivals' budgets. Short-term fill-ins and K/D/ST streams are listed separately at $0-1.
 
 ## Yahoo setup
 

@@ -22,7 +22,7 @@ slot_counts = {k: v for k, v in league.settings.position_slot_counts.items() if 
 roster = [advisor.espn_player(p, week) for p in team.roster]
 # Pull the top free agents at each position you actually start, so a
 # position-specific need (e.g. an empty TE slot) isn't crowded out by QBs.
-positions = {s for s in slot_counts if "/" not in s and s not in advisor.NON_STARTING_SLOTS}
+positions = {s for s in slot_counts if not advisor.is_flex(s) and s not in advisor.NON_STARTING_SLOTS}
 free_agents, seen = [], set()
 for pos in sorted(positions):
     for p in espn.get_free_agents(league, position=pos, size=15):
