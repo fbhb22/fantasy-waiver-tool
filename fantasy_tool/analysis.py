@@ -358,19 +358,23 @@ def faab_bid(ros_gain_points: float, pct_change: float, market: Market, stream: 
 
 
 def evaluate_pickups(roster: list[Profile], pool: list[Profile], slot_counts: dict[str, int],
-                     week: int, final_week: int, market: Market) -> list[dict]:
+                     week: int, final_week: int, market: Market, open_spots: int = 0) -> list[dict]:
     """Every free agent whose addition (with the best drop for that specific
-    add) raises your best weekly lineups' total from this week through the
-    playoffs, with the weeks it helps and a bid."""
+    add, or none while `open_spots` > 0) raises your best weekly lineups'
+    total from this week through the playoffs, with the weeks it helps and a
+    bid. `drop` is None when no drop is needed."""
     slots = advisor.starting_slots(slot_counts)
     base = season_points(roster, slots, week, final_week)
     out = []
     for fa in pool:
-        # Rank drops as if the new player were already on the roster, so
-        # e.g. adding a TE frees up your old injured TE as a drop option.
-        drops = [d for d in drop_ranking(roster + [fa], slot_counts, week, final_week) if d["player"] is not fa]
-        drop = drops[0]
-        after = season_points([p for p in roster if p is not drop["player"]] + [fa], slots, week, final_week)
+        drop = None
+        if open_spots <= 0:
+            # Rank drops as if the new player were already on the roster, so
+            # e.g. adding a TE frees up your old injured TE as a drop option.
+            drops = [d for d in drop_ranking(roster + [fa], slot_counts, week, final_week) if d["player"] is not fa]
+            drop = drops[0]
+        kept = [p for p in roster if drop is None or p is not drop["player"]]
+        after = season_points(kept + [fa], slots, week, final_week)
         gains = {w: after[w] - base[w] for w in base}
         total = sum(gains.values())
         if total <= 0.05:

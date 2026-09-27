@@ -130,13 +130,18 @@ if holes:
     for w, empty, out in holes:
         print(f"   Week {w}: no one for {', '.join(empty)}" + (f" (out: {', '.join(out)})" if out else ""))
 
-results = analysis.evaluate_pickups(roster, pool, slot_counts, week, final_week, market)
+open_spots = advisor.open_roster_spots(roster, slot_counts)
+if open_spots:
+    print(f"\nYou have {open_spots} open roster spot(s): pickups below need no drop.")
+results = analysis.evaluate_pickups(roster, pool, slot_counts, week, final_week, market, open_spots)
 core = [r for r in results if not r["stream"] and not r["short_term"]]
 short_term = [r for r in results if r["short_term"]]
 streams = [r for r in results if r["stream"]]
 
 
 def drop_str(r) -> str:
+    if r["drop"] is None:
+        return "none needed (open roster spot)"
     d = r["drop"]["player"]
     return f"{d.name} ({d.position}, ROS {d.ros_ppg:.1f}/g" + (
         f"; {', '.join(r['drop']['reasons'])}" if r["drop"]["reasons"] else "") + ")"
@@ -164,9 +169,10 @@ if short_term:
 if streams:
     print("\n--- Streaming K / D/ST (bid $0-1) ---")
     for r in streams[:4]:
-        a, d = r["add"], r["drop"]["player"]
+        a = r["add"]
+        drop = f"DROP {r['drop']['player'].name}" if r["drop"] else "no drop (open spot)"
         print(f"   +{r['week_gain']:.1f} this week  {a.name} ({a.position}) "
-              f"vs {a.opponent} (opp rank {a.opp_rank}/32)   DROP {d.name}")
+              f"vs {a.opponent} (opp rank {a.opp_rank}/32)   {drop}")
 
 print("\n--- Your most droppable players ---")
 for d in analysis.drop_ranking(roster, slot_counts, week, final_week)[:5]:

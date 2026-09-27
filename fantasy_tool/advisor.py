@@ -82,6 +82,13 @@ def best_lineup(players: list[RosterPlayer], slots: list[str], key=None) -> dict
     return lineup
 
 
+def open_roster_spots(roster: list[RosterPlayer], slot_counts: dict[str, int]) -> int:
+    """Empty non-IR roster spots: a pickup needs no drop while this is > 0.
+    Players parked in an IR slot don't count against the roster."""
+    limit = sum(n for s, n in slot_counts.items() if s != "IR")
+    return max(limit - sum(1 for p in roster if p.slot != "IR"), 0)
+
+
 def lineup_points(lineup: dict[int, RosterPlayer | None]) -> float:
     return sum(p.proj for p in lineup.values() if p)
 
@@ -118,19 +125,22 @@ def check_lineup(roster: list[RosterPlayer], slot_counts: dict[str, int]) -> dic
 
 
 def waiver_suggestions(roster: list[RosterPlayer], free_agents: list[RosterPlayer],
-                       slot_counts: dict[str, int], top: int = 5) -> list[dict]:
+                       slot_counts: dict[str, int], top: int = 5, open_spots: int = 0) -> list[dict]:
     """For each free agent: how much the best lineup would gain this week if
-    you added them, and which bench player you'd drop. The drop is the lowest
-    season-average player who isn't in the best lineup, so a good player on a
-    bye week isn't suggested just because he projects 0 this week."""
+    you added them, and which bench player you'd drop (None with an open
+    roster spot). The drop is the lowest season-average player who isn't in
+    the best lineup, so a good player on a bye week isn't suggested just
+    because he projects 0 this week."""
     slots = starting_slots(slot_counts)
     base = best_lineup(roster, slots)
     base_points = lineup_points(base)
-    in_lineup = {id(p) for p in base.values() if p}
-    bench = [p for p in roster if id(p) not in in_lineup]
-    if not bench:
-        return []
-    drop = min(bench, key=lambda p: (p.season_avg, p.proj))
+    drop = None
+    if open_spots <= 0:
+        in_lineup = {id(p) for p in base.values() if p}
+        bench = [p for p in roster if id(p) not in in_lineup]
+        if not bench:
+            return []
+        drop = min(bench, key=lambda p: (p.season_avg, p.proj))
 
     out = []
     for fa in free_agents:

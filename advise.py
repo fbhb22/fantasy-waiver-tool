@@ -61,11 +61,14 @@ for i, slot in enumerate(check["slots"]):
     p = check["best"][i]
     print(f"   {slot:9s} {label(p) if p else '(EMPTY - nobody on your roster projects above 0)'}")
 
+open_spots = advisor.open_roster_spots(roster, slot_counts)
 print("\n=== Waiver pickups (vs. your best lineup this week) ===")
-suggestions = advisor.waiver_suggestions(roster, free_agents, slot_counts)
+if open_spots:
+    print(f"You have {open_spots} open roster spot(s): no drop needed.")
+suggestions = advisor.waiver_suggestions(roster, free_agents, slot_counts, open_spots=open_spots)
 if not suggestions:
     print("No free agent improves your best lineup this week.")
 for s in suggestions:
     a, d = s["add"], s["drop"]
-    print(f"   +{s['gain']:4.1f}  ADD {label(a)} owned {a.owned:.1f}%   "
-          f"DROP {d.name} ({d.position}, season avg {d.season_avg:.1f})")
+    drop = f"DROP {d.name} ({d.position}, season avg {d.season_avg:.1f})" if d else "no drop (open spot)"
+    print(f"   +{s['gain']:4.1f}  ADD {label(a)} owned {a.owned:.1f}%   {drop}")
