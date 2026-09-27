@@ -10,7 +10,7 @@ Usage:
 """
 import argparse
 
-from fantasy_tool import advisor, analysis, trades
+from fantasy_tool import advisor, analysis, team_context, trades
 
 parser = argparse.ArgumentParser()
 parser.add_argument("platform", nargs="?", default="espn")
@@ -40,11 +40,12 @@ history = espn.get_history(league, ids)
 meta = espn.get_player_meta(league, ids)
 schedule = espn.get_pro_schedule(league)
 ratings = espn.get_matchup_ratings(league)
+team_ctx = team_context.build(league, week, final_week, schedule, ratings)
 
 
 def roster_of(t):
     return trades.TeamRoster(
-        t, analysis.profiles_for(t.roster, history, meta, schedule, week, final_week, ratings), limit)
+        t, analysis.profiles_for(t.roster, history, meta, schedule, week, final_week, ratings, team_ctx), limit)
 
 
 me = roster_of(me_team)
@@ -62,7 +63,7 @@ for q in args.add:
     found = found if not isinstance(found, list) else found[0]
     extra_meta = espn.get_player_meta(league, [found.playerId])
     extra_hist = espn.get_history(league, [found.playerId])
-    me.players += analysis.profiles_for([found], extra_hist, extra_meta, schedule, week, final_week, ratings)
+    me.players += analysis.profiles_for([found], extra_hist, extra_meta, schedule, week, final_week, ratings, team_ctx)
 others = [roster_of(t) for t in league.teams if t is not me_team]
 if args.team:
     q = args.team.lower()
@@ -86,7 +87,8 @@ def who(p):
         inj = ", out for season" if p.out_for_season else f", out until ~{p.return_date:%b %d}"
     elif p.injury:
         inj = f", {p.injury.lower()}"
-    return f"{p.name} ({p.position}, {p.team}, {p.ros_ppg:.1f}/g{inj})"
+    boost = f", {p.team_note}" if p.team_note else ""
+    return f"{p.name} ({p.position}, {p.team}, {p.ros_ppg:.1f}/g{inj}{boost})"
 
 
 def counts_str(players):

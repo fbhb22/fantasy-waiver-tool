@@ -56,6 +56,8 @@ class Profile(advisor.RosterPlayer):
     opponents: dict = field(default_factory=dict)  # week -> NFL opponent
     auction: float = 0.0  # ESPN-wide average auction value (name value)
     espn_rating: float = 0.0  # ESPN player-rater score, season to date
+    team_boost: dict = field(default_factory=dict)  # week -> points/game from a teammate's absence (team_context)
+    team_note: str = ""
 
     @property
     def ros_ppg(self) -> float:
@@ -181,18 +183,20 @@ def set_matchups(prof: Profile, pro_schedule: dict, ratings: dict, week: int, fi
 def week_value(p: Profile, w: int, mode: str = "blend", haircut: dict | None = None) -> float:
     """Expected points in week w: per-game value x that week's matchup x an
     optional per-player haircut (used for pessimistic trade checks)."""
-    v = p.ppg(mode) * p.matchup.get(w, 1.0)
+    v = max(p.ppg(mode) + p.team_boost.get(w, 0.0), 0.0) * p.matchup.get(w, 1.0)
     if haircut:
         v *= haircut.get(id(p), 1.0)
     return v
 
 
 def profiles_for(players: list, history: dict, meta: dict, pro_schedule: dict,
-                 week: int, final_week: int, ratings: dict | None = None) -> list[Profile]:
+                 week: int, final_week: int, ratings: dict | None = None,
+                 team_ctx=None) -> list[Profile]:
     """Profiles with signals, availability and (with `ratings`) strength of
     schedule for a list of loaded players. `meta` maps player id ->
     get_player_meta() entry; players loaded through get_player_pool() carry
-    their own `injury_details` as a fallback."""
+    their own `injury_details` as a fallback. `team_ctx` (a
+    team_context.TeamContext) adds teammate-injury boosts to later weeks."""
     out = []
     for p in players:
         prof = build_profile(p, history.get(p.playerId), week)
@@ -203,6 +207,8 @@ def profiles_for(players: list, history: dict, meta: dict, pro_schedule: dict,
         set_availability(prof, details, pro_schedule, week, final_week)
         if ratings:
             set_matchups(prof, pro_schedule, ratings, week, final_week)
+        if team_ctx:
+            team_ctx.apply(prof)
         out.append(prof)
     return out
 
@@ -211,7 +217,7 @@ def ros_market_value(p: Profile) -> float:
     """Context-free 'on paper' worth: per-game value x remaining games he can
     play. What a league-mate eyeballing a trade roughly sees, independent of
     either team's lineup needs."""
-    return p.ros_ppg * len(p.available)
+    return sum(max(p.ros_ppg + p.team_boost.get(w, 0.0), 0.0) for w in p.available)
 
 
 def _ros_lineup_points(players: list[Profile], slots: list[str], w: int = 0, mode: str = "blend",
@@ -287,6 +293,8 @@ def drop_ranking(roster: list[Profile], slot_counts: dict[str, int], week: int, 
             reasons.append(p.injury.lower())
         if p.trend == "falling":
             reasons.append("usage falling")
+        if p.team_note:
+            reasons.append(p.team_note)
         avail_frac = len(p.available) / n_weeks
         score = (loss / n_weeks) * 10 + p.ros_ppg * avail_frac + (5 if only_depth else 0)
         out.append({"player": p, "loss": loss, "score": score, "reasons": reasons})

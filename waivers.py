@@ -6,7 +6,7 @@ Usage:
 """
 import sys
 
-from fantasy_tool import advisor, analysis
+from fantasy_tool import advisor, analysis, team_context
 
 platform = sys.argv[1].lower() if len(sys.argv) > 1 else "espn"
 if platform != "espn":
@@ -28,9 +28,10 @@ history = espn.get_history(league, [p.playerId for p in team.roster] + [p.player
 pro_schedule = espn.get_pro_schedule(league)
 roster_meta = espn.get_player_meta(league, [p.playerId for p in team.roster])
 ratings = espn.get_matchup_ratings(league)
+team_ctx = team_context.build(league, week, final_week, pro_schedule, ratings)
 
-roster = analysis.profiles_for(team.roster, history, roster_meta, pro_schedule, week, final_week, ratings)
-pool = analysis.profiles_for(pool_raw, history, {}, pro_schedule, week, final_week, ratings)
+roster = analysis.profiles_for(team.roster, history, roster_meta, pro_schedule, week, final_week, ratings, team_ctx)
+pool = analysis.profiles_for(pool_raw, history, {}, pro_schedule, week, final_week, ratings, team_ctx)
 
 budget = int(getattr(league.settings, "acquisition_budget", 0) or 0)
 rivals = sorted((budget - t.acquisition_budget_spent for t in league.teams if t is not team), reverse=True)
@@ -86,6 +87,8 @@ def signals(p: analysis.Profile) -> str:
     inj = injury_str(p)
     if inj:
         bits.append(inj)
+    if p.team_note:
+        bits.append(p.team_note)
     return "; ".join(bits)
 
 
