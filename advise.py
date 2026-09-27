@@ -2,13 +2,18 @@
 changes your roster or lineup).
 
 Usage:
-    python advise.py espn
+    python advise.py espn          # free-agent QBs left out
+    python advise.py espn --qb     # include them
 """
 import sys
 
 from fantasy_tool import advisor
 
-platform = sys.argv[1].lower() if len(sys.argv) > 1 else "espn"
+args = [a.lower() for a in sys.argv[1:]]
+# Free-agent QBs are left out unless asked for: in a 1-QB league a backup QB
+# rarely starts, but its injury-insurance value crowds the pickup list.
+include_qb = "--qb" in args
+platform = next((a for a in args if not a.startswith("--")), "espn")
 if platform != "espn":
     sys.exit("Only ESPN is supported so far (Yahoo access is still pending).")
 
@@ -24,7 +29,7 @@ roster = [advisor.espn_player(p, week) for p in team.roster]
 # position-specific need (e.g. an empty TE slot) isn't crowded out by QBs.
 positions = {s for s in slot_counts if not advisor.is_flex(s) and s not in advisor.NON_STARTING_SLOTS}
 free_agents, seen = [], set()
-for pos in sorted(positions):
+for pos in sorted(positions - (set() if include_qb else {"QB"})):
     for p in espn.get_free_agents(league, position=pos, size=15):
         if p.playerId not in seen:
             seen.add(p.playerId)
@@ -63,6 +68,8 @@ for i, slot in enumerate(check["slots"]):
 
 open_spots = advisor.open_roster_spots(roster, slot_counts)
 print("\n=== Waiver pickups (vs. your best lineup this week) ===")
+if not include_qb:
+    print("(Free-agent QBs left out; add --qb to include them.)")
 if open_spots:
     print(f"You have {open_spots} open roster spot(s): no drop needed.")
 suggestions = advisor.waiver_suggestions(roster, free_agents, slot_counts, open_spots=open_spots)

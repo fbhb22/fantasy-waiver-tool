@@ -2,13 +2,18 @@
 your roster, never places a bid).
 
 Usage:
-    python waivers.py espn
+    python waivers.py espn          # free-agent QBs left out
+    python waivers.py espn --qb     # include them
 """
 import sys
 
 from fantasy_tool import advisor, analysis, team_context
 
-platform = sys.argv[1].lower() if len(sys.argv) > 1 else "espn"
+args = [a.lower() for a in sys.argv[1:]]
+# Free-agent QBs are left out unless asked for: in a 1-QB league a backup QB
+# rarely starts, but its injury-insurance value crowds the pickup list.
+include_qb = "--qb" in args
+platform = next((a for a in args if not a.startswith("--")), "espn")
 if platform != "espn":
     sys.exit("Only ESPN is supported so far (Yahoo access is still pending).")
 
@@ -23,7 +28,8 @@ slots = advisor.starting_slots(slot_counts)
 positions = sorted(s for s in slot_counts if not advisor.is_flex(s) and s not in advisor.NON_STARTING_SLOTS)
 
 # Candidates: the most-owned free agents at every position you start.
-pool_raw = [p for pos in positions for p in espn.get_player_pool(league, pos, size=20)]
+pool_raw = [p for pos in positions if include_qb or pos != "QB"
+            for p in espn.get_player_pool(league, pos, size=20)]
 history = espn.get_history(league, [p.playerId for p in team.roster] + [p.playerId for p in pool_raw])
 pro_schedule = espn.get_pro_schedule(league)
 roster_meta = espn.get_player_meta(league, [p.playerId for p in team.roster])
@@ -148,6 +154,8 @@ def drop_str(r) -> str:
 
 
 print("\n--- Best pickups (season points added to your best weekly lineups) ---")
+if not include_qb:
+    print("(Free-agent QBs left out; add --qb to include them.)")
 if not core:
     print("No free agent adds lasting value to your lineup right now.")
 for i, r in enumerate(core[:6], 1):
